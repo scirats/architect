@@ -69,12 +69,45 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    // Resolve token: CLI flag > persisted file > empty
+    let data_dir = architect_core::config::data_dir();
+    std::fs::create_dir_all(&data_dir).ok();
+    let token_path = data_dir.join("cluster_token");
+    let resolved_token = if !cli.token.is_empty() {
+        // CLI provided — persist for future restarts
+        let _ = std::fs::write(&token_path, &cli.token);
+        cli.token.clone()
+    } else if token_path.exists() {
+        std::fs::read_to_string(&token_path)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    } else {
+        String::new()
+    };
+
+    // Resolve coordinator address: CLI flag > persisted file > None (discovery)
+    let addr_path = data_dir.join("coordinator_addr");
+    let resolved_coordinator: Option<SocketAddr> = if cli.coordinator.is_some() {
+        // CLI provided — persist for future restarts
+        if let Some(addr) = &cli.coordinator {
+            let _ = std::fs::write(&addr_path, addr.to_string());
+        }
+        cli.coordinator
+    } else if addr_path.exists() {
+        std::fs::read_to_string(&addr_path)
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+    } else {
+        None
+    };
+
     let collector = Arc::new(Mutex::new(MetricsCollector::new()));
     let mut node_info = collector.lock().unwrap().collect_info();
-    node_info.auth_token = cli.token.clone();
+    node_info.auth_token = resolved_token.clone();
 
     // Shared mutable token for rotation
-    let current_token = Arc::new(Mutex::new(cli.token.clone()));
+    let current_token = Arc::new(Mutex::new(resolved_token.clone()));
 
     if cli.capabilities {
         println!("Node ID: {}", node_info.id);
@@ -100,6 +133,16 @@ async fn main() -> Result<()> {
         "[architect-agent] os={} arch={} score={:.1}",
         node_info.os, node_info.arch, node_info.capabilities.compute_score
     );
+    if resolved_token.is_empty() {
+        eprintln!("[architect-agent] warning: no cluster token (use --token or seed via coordinator)");
+    } else {
+        eprintln!("[architect-agent] token={}...{}", &resolved_token[..resolved_token.len().min(8)], &resolved_token[resolved_token.len().saturating_sub(4)..]);
+    }
+    if let Some(addr) = &resolved_coordinator {
+        eprintln!("[architect-agent] coordinator={}", addr);
+    } else {
+        eprintln!("[architect-agent] coordinator=auto-discover");
+    }
     info!("Starting architect agent");
     info!("Node ID: {}", node_info.id);
 
@@ -128,7 +171,7 @@ async fn main() -> Result<()> {
         info!("mTLS client cert already exists: {:?}", client_cert_path);
     }
 
-    let mut coordinator_addr: Option<SocketAddr> = cli.coordinator;
+    let mut coordinator_addr: Option<SocketAddr> = resolved_coordinator;
     let mut retry_count = 0u32;
 
     // Persistent result buffer: survives reconnections
@@ -147,6 +190,8 @@ async fn main() -> Result<()> {
                     Some(addr) => {
                         eprintln!("[architect-agent] discovered coordinator: {}", addr);
                         coordinator_addr = Some(addr);
+                        // Persist for future restarts
+                        let _ = std::fs::write(&addr_path, addr.to_string());
                         addr
                     }
                     None => {
@@ -429,7 +474,7 @@ async fn main() -> Result<()> {
                 eprintln!("[architect-agent] error: {}", e);
                 retry_count += 1;
 
-                if retry_count >= cli.max_retries && cli.coordinator.is_some() {
+                if retry_count >= cli.max_retries && resolved_coordinator.is_some() {
                     eprintln!(
                         "[architect-agent] {} retries failed, switching to discovery mode",
                         retry_count
