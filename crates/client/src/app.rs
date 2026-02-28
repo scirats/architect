@@ -205,9 +205,7 @@ impl App {
                 .and_then(|m| m.modified())
                 .ok(),
             leader: {
-                let db_path = init.config_path.parent()
-                    .unwrap_or(std::path::Path::new("."))
-                    .join("architect.db");
+                let db_path = architect_core::config::data_dir().join("architect.db");
                 let mut le = crate::leader::LeaderElection::new(
                     db_path,
                     init.client_id.to_string(),
@@ -516,7 +514,7 @@ impl App {
                     }
                 });
             }
-            Command::Seed { target, user } => {
+            Command::Seed { target, user, pass } => {
                 let ip: std::net::IpAddr = match target.parse() {
                     Ok(ip) => ip,
                     Err(_) => {
@@ -544,18 +542,23 @@ impl App {
                     }
                 };
 
+                // Build coordinator address for the remote agent
+                let coordinator_addr = {
+                    let local_ip = std::net::UdpSocket::bind("0.0.0.0:0")
+                        .and_then(|s| { s.connect("8.8.8.8:80")?; s.local_addr() })
+                        .map(|a| a.ip().to_string())
+                        .unwrap_or_else(|_| "127.0.0.1".to_string());
+                    format!("{}:{}", local_ip, self.grpc_port)
+                };
+
                 crate::bootstrap_manager::spawn_deploy(
                     node,
                     user.clone(),
+                    pass,
                     self.github_repo.clone(),
                     self.cluster_token.clone(),
+                    coordinator_addr,
                     self.event_tx.clone(),
-                );
-
-                let user_str = user.as_deref().unwrap_or("root");
-                self.workspace.append_activity(
-                    format!("[seed] started -> {}@{}", user_str, target),
-                    ActivityLevel::Info,
                 );
             }
             Command::Bless => {
@@ -1257,14 +1260,20 @@ impl App {
         match event {
             BootstrapEvent::Started { host } => {
                 self.workspace.append_activity(
-                    format!("Deploying agent to {}...", host),
+                    format!("[seed] deploying to {}...", host),
+                    ActivityLevel::Info,
+                );
+            }
+            BootstrapEvent::Progress { host, step } => {
+                self.workspace.append_activity(
+                    format!("[seed] {} — {}", host, step),
                     ActivityLevel::Info,
                 );
             }
             BootstrapEvent::Success { host, method } => {
                 info!("Agent deployed to {} via {}", host, method);
                 self.workspace.append_activity(
-                    format!("Agent deployed to {} via {}", host, method),
+                    format!("[seed] {} — deployed via {}, agent auto-discovering coordinator...", host, method),
                     ActivityLevel::Success,
                 );
             }

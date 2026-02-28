@@ -6,7 +6,7 @@ license.workspace = true
 
 [features]
 default = ["ssh"]
-ssh = ["dep:openssh"]
+ssh = []
 adb = []
 winrm = []
 
@@ -15,5 +15,3 @@ architect-core = { path = "../core" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
-data-encoding = { workspace = true }
-openssh = { version = "0.11", optional = true }

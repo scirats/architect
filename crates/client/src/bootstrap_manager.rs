@@ -11,8 +11,10 @@ use crate::network_discovery::BootstrapEvent;
 pub fn spawn_deploy(
     node: DiscoveredNode,
     ssh_user: Option<String>,
+    ssh_pass: Option<String>,
     github_repo: String,
     cluster_token: String,
+    coordinator_addr: String,
     event_tx: mpsc::UnboundedSender<Event>,
 ) {
     tokio::spawn(async move {
@@ -23,11 +25,23 @@ pub fn spawn_deploy(
         let mut orchestrator = BootstrapOrchestrator::new();
         orchestrator.set_github_repo(github_repo);
         orchestrator.set_cluster_token(cluster_token);
+        orchestrator.set_coordinator_addr(coordinator_addr);
+
+        // Progress callback → sends events to TUI
+        let host = node.ip;
+        let tx = event_tx.clone();
+        orchestrator.set_on_progress(Box::new(move |step: &str| {
+            let _ = tx.send(Event::Bootstrap(BootstrapEvent::Progress {
+                host,
+                step: step.to_string(),
+            }));
+        }));
 
         let target = BootstrapTarget {
             host: node.ip,
             device_type: node.device_type,
             ssh_user,
+            ssh_pass,
             winrm_credentials: None,
         };
 

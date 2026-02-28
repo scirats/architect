@@ -83,7 +83,7 @@ pub enum Command {
     Cancel { task_id: String },
     // Discovery/Bootstrap commands
     Pulse { subnet: Option<String> },
-    Seed { target: String, user: Option<String> },
+    Seed { target: String, user: Option<String>, pass: Option<String> },
     // Hardening commands
     Bless,
     Ascend { url: Option<String> },
@@ -107,7 +107,7 @@ pub const WORKSPACE_COMMANDS: &[(&str, &str, &str)] = &[
     ("info",       "inspect node details and logs",         "[node_id]"),
     ("bless",      "rotate cluster auth token",             ""),
     ("pulse",      "scan local network for devices",        "[--subnet 192.168.1.0/24]"),
-    ("seed",       "install agent on a remote device",      "<ip> [--user root]"),
+    ("seed",       "install agent on a remote device",      "<ip> [--user root] [--pass pw]"),
     ("ascend",     "push latest agent to all nodes",        "[url]"),
     ("purge",      "erase agent and all traces from device","<node_id | all>"),
     ("", "", ""),
@@ -335,6 +335,7 @@ pub fn parse_command(input: &str) -> Command {
             Command::Seed {
                 target,
                 user: get_flag(args, "--user"),
+                pass: get_flag(args, "--pass"),
             }
         }
 

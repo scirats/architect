@@ -71,15 +71,16 @@ pub async fn browse_mdns(timeout_duration: Duration) -> Option<SocketAddr> {
     let mdns = MdnsDiscovery::new(0);
     let (tx, mut rx) = mpsc::channel(8);
 
-    let browse_handle = tokio::spawn(async move {
+    // Let the browse task run to completion so the mDNS daemon is properly shut down.
+    // Aborting it would leak file descriptors (sockets not closed).
+    tokio::spawn(async move {
         if let Err(e) = mdns.browse(tx, timeout_duration).await {
             warn!("mDNS browse error: {}", e);
         }
     });
 
-    // Take the first discovered node
+    // Take the first discovered node (or timeout)
     let result = tokio::time::timeout(timeout_duration, rx.recv()).await;
-    browse_handle.abort();
 
     match result {
         Ok(Some(node)) => {

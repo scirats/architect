@@ -40,22 +40,45 @@ struct Cli {
 
     #[arg(long, default_value = "9878", help = "Health/metrics HTTP port")]
     health_port: u16,
+
+    #[arg(long, help = "Check config and environment, then exit")]
+    doctor: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    if cli.doctor {
+        let checks = architect_core::config::doctor(cli.config.as_deref());
+        let mut all_ok = true;
+        for c in &checks {
+            let icon = if c.ok { "\x1b[32m✓\x1b[0m" } else { "\x1b[31m✗\x1b[0m" };
+            println!("  {} {:<22} {}", icon, c.name, c.detail);
+            if !c.ok { all_ok = false; }
+        }
+        println!();
+        if all_ok {
+            println!("\x1b[32mAll checks passed.\x1b[0m");
+        } else {
+            println!("\x1b[31mSome checks failed. Fix the issues above.\x1b[0m");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     // Log rotation: daily rolling logs to ~/.architect/logs/
     let log_dir = architect_core::config::log_dir();
     std::fs::create_dir_all(&log_dir)?;
     let file_appender = tracing_appender::rolling::daily(&log_dir, "client.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
     tracing_subscriber::fmt()
-        .with_env_filter("client=debug,architect_core=debug")
+        .with_env_filter("architect=debug,architect_core=debug,tonic=info,h2=info,hyper=info")
         .with_writer(non_blocking)
         .with_ansi(false)
         .init();
 
-    let cli = Cli::parse();
+    // cli already parsed above
 
     // Load config: --config flag > default platform path
     let config = match &cli.config {

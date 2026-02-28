@@ -99,6 +99,9 @@ impl MdnsDiscovery {
         if let Err(e) = daemon.stop_browse(SERVICE_TYPE) {
             warn!("Failed to stop mDNS browse: {:?}", e);
         }
+        if let Err(e) = daemon.shutdown() {
+            warn!("Failed to shutdown mDNS daemon: {:?}", e);
+        }
 
         info!("mDNS browse completed");
         Ok(())

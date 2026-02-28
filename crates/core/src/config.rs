@@ -204,10 +204,22 @@ fn default_github_repo() -> String {
     "scirats/architect".to_string()
 }
 
+fn deserialize_github_repo<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: String = serde::Deserialize::deserialize(deserializer)?;
+    if s.is_empty() {
+        Ok(default_github_repo())
+    } else {
+        Ok(s)
+    }
+}
+
 /// Top-level configuration aggregating all sub-configs.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArchitectConfig {
-    #[serde(default = "default_github_repo")]
+    #[serde(default = "default_github_repo", deserialize_with = "deserialize_github_repo")]
     pub github_repo: String,
     #[serde(default)]
     pub coordinator: CoordinatorConfig,
@@ -223,6 +235,21 @@ pub struct ArchitectConfig {
     pub bootstrap: BootstrapConfig,
     #[serde(default)]
     pub resources: ResourceConfig,
+}
+
+impl Default for ArchitectConfig {
+    fn default() -> Self {
+        Self {
+            github_repo: default_github_repo(),
+            coordinator: CoordinatorConfig::default(),
+            transport: TransportConfig::default(),
+            scheduler: SchedulerConfig::default(),
+            ml: MlConfig::default(),
+            discovery: DiscoveryConfig::default(),
+            bootstrap: BootstrapConfig::default(),
+            resources: ResourceConfig::default(),
+        }
+    }
 }
 
 /// Returns the platform-specific config directory for architect.
@@ -327,6 +354,180 @@ pub fn save_config(config: &ArchitectConfig, path: &str) -> anyhow::Result<()> {
     std::fs::write(path, contents)?;
     tracing::info!("Config saved to {:?}", path);
     Ok(())
+}
+
+/// Diagnostic result for a single config check.
+pub struct DiagCheck {
+    pub name: &'static str,
+    pub ok: bool,
+    pub detail: String,
+}
+
+/// Run diagnostics on the config file and environment.
+/// Returns a list of checks with pass/fail status.
+pub fn doctor(config_path_override: Option<&str>) -> Vec<DiagCheck> {
+    let mut checks = Vec::new();
+
+    // 1. Config file exists
+    let path = match config_path_override {
+        Some(p) => std::path::PathBuf::from(p),
+        None => config_path(),
+    };
+    let path_str = path.to_string_lossy().to_string();
+    checks.push(DiagCheck {
+        name: "config file",
+        ok: path.exists(),
+        detail: if path.exists() {
+            format!("found at {}", path_str)
+        } else {
+            format!("not found at {} (run the client once to generate it)", path_str)
+        },
+    });
+
+    if !path.exists() {
+        return checks;
+    }
+
+    // 2. Config file is valid TOML
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            checks.push(DiagCheck {
+                name: "config readable",
+                ok: false,
+                detail: format!("cannot read: {}", e),
+            });
+            return checks;
+        }
+    };
+
+    let config: ArchitectConfig = match toml::from_str(&contents) {
+        Ok(c) => {
+            checks.push(DiagCheck {
+                name: "config parseable",
+                ok: true,
+                detail: "valid TOML".into(),
+            });
+            c
+        }
+        Err(e) => {
+            checks.push(DiagCheck {
+                name: "config parseable",
+                ok: false,
+                detail: format!("parse error: {}", e),
+            });
+            return checks;
+        }
+    };
+
+    // 3. github_repo
+    checks.push(DiagCheck {
+        name: "github_repo",
+        ok: !config.github_repo.is_empty() && config.github_repo.contains('/'),
+        detail: if config.github_repo.is_empty() {
+            "empty — set to \"owner/repo\"".into()
+        } else if !config.github_repo.contains('/') {
+            format!("\"{}\" — must be in owner/repo format", config.github_repo)
+        } else {
+            config.github_repo.clone()
+        },
+    });
+
+    // 4. cluster_token
+    checks.push(DiagCheck {
+        name: "cluster_token",
+        ok: !config.coordinator.cluster_token.is_empty(),
+        detail: if config.coordinator.cluster_token.is_empty() {
+            "empty — agents won't authenticate".into()
+        } else {
+            format!("{}...{}", &config.coordinator.cluster_token[..8],
+                &config.coordinator.cluster_token[config.coordinator.cluster_token.len().saturating_sub(4)..])
+        },
+    });
+
+    // 5. coordinator port
+    checks.push(DiagCheck {
+        name: "coordinator.port",
+        ok: config.coordinator.port > 0,
+        detail: format!("{}", config.coordinator.port),
+    });
+
+    // 6. beacon config
+    checks.push(DiagCheck {
+        name: "discovery.beacon",
+        ok: true,
+        detail: if config.discovery.beacon_enabled {
+            format!("enabled on port {} (interval {}ms)", config.discovery.beacon_port, config.discovery.beacon_interval_ms)
+        } else {
+            "disabled — agents won't auto-discover this coordinator".into()
+        },
+    });
+
+    // 7. mDNS
+    checks.push(DiagCheck {
+        name: "discovery.mdns",
+        ok: true,
+        detail: if config.discovery.mdns_enabled { "enabled".into() } else { "disabled".into() },
+    });
+
+    // 8. resource limits
+    let cpu_ok = config.resources.cpu_limit_pct > 0.0 && config.resources.cpu_limit_pct <= 100.0;
+    let ram_ok = config.resources.ram_limit_pct > 0.0 && config.resources.ram_limit_pct <= 100.0;
+    checks.push(DiagCheck {
+        name: "resources.cpu_limit",
+        ok: cpu_ok,
+        detail: if cpu_ok {
+            format!("{}%", config.resources.cpu_limit_pct)
+        } else {
+            format!("{}% — must be between 0 and 100", config.resources.cpu_limit_pct)
+        },
+    });
+    checks.push(DiagCheck {
+        name: "resources.ram_limit",
+        ok: ram_ok,
+        detail: if ram_ok {
+            format!("{}%", config.resources.ram_limit_pct)
+        } else {
+            format!("{}% — must be between 0 and 100", config.resources.ram_limit_pct)
+        },
+    });
+
+    // 9. TLS certs
+    let certs_dir = crate::tls::certs_dir();
+    let ca_cert = certs_dir.join("ca-cert.pem");
+    let ca_key = certs_dir.join("ca-key.pem");
+    checks.push(DiagCheck {
+        name: "tls.ca_cert",
+        ok: ca_cert.exists(),
+        detail: if ca_cert.exists() {
+            format!("found at {}", ca_cert.display())
+        } else {
+            format!("not found at {} (run :bless or generate certs)", ca_cert.display())
+        },
+    });
+    checks.push(DiagCheck {
+        name: "tls.ca_key",
+        ok: ca_key.exists(),
+        detail: if ca_key.exists() {
+            format!("found at {}", ca_key.display())
+        } else {
+            format!("not found at {}", ca_key.display())
+        },
+    });
+
+    // 10. Log directory writable
+    let log = log_dir();
+    checks.push(DiagCheck {
+        name: "log_dir",
+        ok: log.exists(),
+        detail: if log.exists() {
+            format!("{}", log.display())
+        } else {
+            format!("{} — does not exist", log.display())
+        },
+    });
+
+    checks
 }
 
 /// Get the user's home directory.

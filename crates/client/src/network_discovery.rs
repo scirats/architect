@@ -18,6 +18,7 @@ pub enum DiscoveryEvent {
 #[derive(Debug, Clone)]
 pub enum BootstrapEvent {
     Started { host: IpAddr },
+    Progress { host: IpAddr, step: String },
     Success { host: IpAddr, method: String },
     Failed { host: IpAddr, error: String },
 }

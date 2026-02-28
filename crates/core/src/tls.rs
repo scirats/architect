@@ -66,11 +66,19 @@ fn generate_certs(paths: &CertPaths) -> anyhow::Result<()> {
 
     // Generate server cert signed by CA
     let server_key = KeyPair::generate()?;
-    let mut server_params = CertificateParams::new(vec![
+    let mut sans = vec![
         "localhost".to_string(),
         "127.0.0.1".to_string(),
         "0.0.0.0".to_string(),
-    ])?;
+    ];
+    // Add all local network interface IPs so agents on LAN can verify the cert
+    for iface in get_local_ips() {
+        let ip_str = iface.to_string();
+        if !sans.contains(&ip_str) {
+            sans.push(ip_str);
+        }
+    }
+    let mut server_params = CertificateParams::new(sans)?;
     let mut server_dn = DistinguishedName::new();
     server_dn.push(rcgen::DnType::CommonName, "Architect Server");
     server_dn.push(rcgen::DnType::OrganizationName, "Architect");
@@ -173,4 +181,64 @@ fn atomic_write(dest: &Path, content: impl AsRef<str>) -> anyhow::Result<()> {
     std::fs::write(&tmp, content.as_ref())?;
     std::fs::rename(&tmp, dest)?;
     Ok(())
+}
+
+/// Get all non-loopback IPv4 addresses from local network interfaces.
+fn get_local_ips() -> Vec<std::net::IpAddr> {
+    let mut ips = Vec::new();
+
+    #[cfg(unix)]
+    {
+        // Linux: hostname -I
+        if let Ok(output) = std::process::Command::new("hostname").arg("-I").output() {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for part in stdout.split_whitespace() {
+                    if let Ok(ip) = part.parse::<std::net::IpAddr>() {
+                        if !ip.is_loopback() && !ips.contains(&ip) {
+                            ips.push(ip);
+                        }
+                    }
+                }
+            }
+        }
+        // macOS: ifconfig (hostname -I doesn't exist)
+        if ips.is_empty() {
+            if let Ok(output) = std::process::Command::new("ifconfig").output() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    let line = line.trim();
+                    if line.starts_with("inet ") && !line.contains("127.0.0.1") {
+                        if let Some(ip_str) = line.split_whitespace().nth(1) {
+                            if let Ok(ip) = ip_str.parse::<std::net::IpAddr>() {
+                                if !ips.contains(&ip) {
+                                    ips.push(ip);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(output) = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", "(Get-NetIPAddress -AddressFamily IPv4).IPAddress"])
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                let line = line.trim();
+                if let Ok(ip) = line.parse::<std::net::IpAddr>() {
+                    if !ip.is_loopback() && !ips.contains(&ip) {
+                        ips.push(ip);
+                    }
+                }
+            }
+        }
+    }
+
+    ips
 }

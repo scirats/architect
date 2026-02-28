@@ -27,6 +27,7 @@ pub struct BootstrapTarget {
     pub host: IpAddr,
     pub device_type: DeviceType,
     pub ssh_user: Option<String>,
+    pub ssh_pass: Option<String>,
     pub winrm_credentials: Option<(String, String)>,
 }
 
@@ -68,9 +69,14 @@ fn github_agent_url(github_repo: &str, label: &str) -> String {
 
 /// Orchestrates agent deployment across discovered nodes.
 /// Tries appropriate methods based on device type: SSH -> ADB -> WinRM.
+/// Callback for reporting progress steps during bootstrap.
+pub type ProgressFn = Box<dyn Fn(&str) + Send + Sync>;
+
 pub struct BootstrapOrchestrator {
     github_repo: Option<String>,
     cluster_token: Option<String>,
+    coordinator_addr: Option<String>,
+    on_progress: Option<ProgressFn>,
 }
 
 impl BootstrapOrchestrator {
@@ -78,6 +84,8 @@ impl BootstrapOrchestrator {
         Self {
             github_repo: None,
             cluster_token: None,
+            coordinator_addr: None,
+            on_progress: None,
         }
     }
 
@@ -89,12 +97,30 @@ impl BootstrapOrchestrator {
         self.cluster_token = Some(token);
     }
 
-    fn agent_args(&self) -> String {
-        let mut args = String::new();
-        if let Some(token) = &self.cluster_token {
-            args.push_str(&format!("--token {}", token));
+    pub fn set_coordinator_addr(&mut self, addr: String) {
+        self.coordinator_addr = Some(addr);
+    }
+
+    pub fn set_on_progress(&mut self, f: ProgressFn) {
+        self.on_progress = Some(f);
+    }
+
+    fn progress(&self, msg: &str) {
+        info!("{}", msg);
+        if let Some(f) = &self.on_progress {
+            f(msg);
         }
-        args
+    }
+
+    fn agent_args(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(addr) = &self.coordinator_addr {
+            parts.push(format!("--coordinator {}", addr));
+        }
+        if let Some(token) = &self.cluster_token {
+            parts.push(format!("--token {}", token));
+        }
+        parts.join(" ")
     }
 
     /// Bootstrap a single target, trying methods in priority order.
@@ -109,6 +135,8 @@ impl BootstrapOrchestrator {
                 error: Some("github_repo not configured".into()),
             };
         }
+
+        let mut errors: Vec<String> = Vec::new();
 
         match target.device_type {
             DeviceType::Phone => {
@@ -126,6 +154,7 @@ impl BootstrapOrchestrator {
                         }
                         Err(e) => {
                             warn!("ADB bootstrap failed for {}: {}", target.host, e);
+                            errors.push(format!("adb: {}", e));
                         }
                     }
                 }
@@ -145,6 +174,7 @@ impl BootstrapOrchestrator {
                         }
                         Err(e) => {
                             warn!("SSH bootstrap failed for {}: {}", target.host, e);
+                            errors.push(format!("ssh: {}", e));
                         }
                     }
                 }
@@ -163,6 +193,7 @@ impl BootstrapOrchestrator {
                         }
                         Err(e) => {
                             warn!("WinRM bootstrap failed for {}: {}", target.host, e);
+                            errors.push(format!("winrm: {}", e));
                         }
                     }
                 }
@@ -170,13 +201,19 @@ impl BootstrapOrchestrator {
             _ => {}
         }
 
-        error!("All bootstrap methods failed for {}", target.host);
+        let detail = if errors.is_empty() {
+            "no bootstrap method available".into()
+        } else {
+            errors.join("; ")
+        };
+
+        error!("All bootstrap methods failed for {}: {}", target.host, detail);
 
         BootstrapResult {
             host: target.host,
             success: false,
             method: BootstrapMethod::Manual,
-            error: Some("All bootstrap methods failed".into()),
+            error: Some(detail),
         }
     }
 
@@ -203,39 +240,88 @@ impl BootstrapOrchestrator {
     async fn try_ssh(&self, target: &BootstrapTarget, user: &str) -> anyhow::Result<()> {
         let repo = self.github_repo.as_ref().unwrap();
         let ssh = super::ssh::SshBootstrapper::new(30);
-        let session = ssh.connect(target.host, user).await?;
 
-        let os = ssh.detect_os(&session).await?;
-        let arch = ssh.detect_arch(&session).await?;
-        info!("Remote platform for {}: {} {}", target.host, os, arch);
+        self.progress("connecting via ssh...");
+        let session = ssh.connect(target.host, user, target.ssh_pass.as_deref()).await?;
+
+        self.progress("detecting platform...");
+        let os = session.detect_os().await?;
+        let arch = session.detect_arch().await?;
 
         let label = uname_to_label(&os, &arch)
             .ok_or_else(|| anyhow::anyhow!("Unsupported platform: {} {}", os, arch))?;
+        self.progress(&format!("platform: {} ({})", label, arch));
+
         let download_url = github_agent_url(repo, &label);
         let remote_path = "/tmp/architect-agent";
 
-        let cmd = format!("curl -sL -o {} '{}'", remote_path, download_url);
-        let status = session
-            .command("sh")
-            .arg("-c")
-            .arg(&cmd)
-            .status()
-            .await
-            .map_err(|e| anyhow::anyhow!("Download failed: {}", e))?;
-        if !status.success() {
-            anyhow::bail!("curl download failed for {}", label);
+        self.progress(&format!("downloading agent from {}...", download_url));
+        let dl_result = session
+            .run(&format!(
+                "curl -fsSL -o {} '{}' 2>&1",
+                remote_path, download_url
+            ))
+            .await;
+
+        if let Err(e) = dl_result {
+            // curl -f returns exit 22 on HTTP errors (404, etc.)
+            anyhow::bail!(
+                "Download failed: {}. URL: {}",
+                e, download_url
+            );
         }
 
+        // Verify the downloaded file is an actual binary, not an HTML error page
+        self.progress("verifying binary...");
+        let file_info = session
+            .run(&format!("file {}", remote_path))
+            .await
+            .unwrap_or_default();
+
+        if file_info.contains("HTML")
+            || file_info.contains("ASCII text")
+            || file_info.contains("empty")
+        {
+            // Clean up the invalid file
+            let _ = session.run(&format!("rm -f {}", remote_path)).await;
+            anyhow::bail!(
+                "Downloaded file is not a valid binary ({}). Verify release exists at: {}",
+                file_info, download_url
+            );
+        }
+
+        self.progress(&format!("binary verified: {}", file_info.split(':').last().unwrap_or("ok").trim()));
+
         session
-            .command("chmod")
-            .arg("+x")
-            .arg(remote_path)
-            .status()
+            .run(&format!("chmod +x {}", remote_path))
             .await
             .map_err(|e| anyhow::anyhow!("chmod failed: {}", e))?;
 
-        ssh.start_agent(&session, remote_path, &self.agent_args())
-            .await?;
+        self.progress("starting agent...");
+        session.start_agent(remote_path, &self.agent_args()).await?;
+
+        // Verify the agent process is actually running
+        self.progress("verifying agent process...");
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        let ps_check = session
+            .run("pgrep -f architect-agent || true")
+            .await
+            .unwrap_or_default();
+
+        if ps_check.trim().is_empty() {
+            // Agent didn't stay running — check its log for clues
+            let log = session
+                .run("tail -5 /tmp/architect-agent.log 2>/dev/null || echo 'no log'")
+                .await
+                .unwrap_or_else(|_| "could not read log".into());
+            anyhow::bail!(
+                "Agent binary started but exited immediately. Log:\n{}",
+                log
+            );
+        }
+
+        self.progress("agent is running, waiting for discovery...");
 
         Ok(())
     }
@@ -255,14 +341,14 @@ impl BootstrapOrchestrator {
 
         // Download directly on the device
         let serial = format!("{}:5555", target.host);
-        let dl_cmd = format!("curl -sL -o {} '{}'", remote_path, download_url);
+        let dl_cmd = format!("curl -fsSL -o {} '{}'", remote_path, download_url);
         let output = tokio::process::Command::new("adb")
             .args(["-s", &serial, "shell", &dl_cmd])
             .output()
             .await?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("ADB download failed: {}", stderr);
+            anyhow::bail!("ADB download failed: {}. URL: {}", stderr.trim(), download_url);
         }
 
         // chmod +x
