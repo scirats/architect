@@ -96,7 +96,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "architect-agent"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "architect-core",
@@ -118,7 +118,7 @@ dependencies = [
 
 [[package]]
 name = "architect-bootstrap"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "architect-core",
@@ -130,7 +130,7 @@ dependencies = [
 
 [[package]]
 name = "architect-client"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "architect-bootstrap",
@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "architect-compute"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "architect-core",
@@ -175,7 +175,7 @@ dependencies = [
 
 [[package]]
 name = "architect-core"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "architect-discovery"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "architect-core",
@@ -211,7 +211,7 @@ dependencies = [
 
 [[package]]
 name = "architect-ml"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "architect-compute",
@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "architect-scheduler"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "architect-core",
  "tracing",
@@ -232,7 +232,7 @@ dependencies = [
 
 [[package]]
 name = "architect-transport"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "architect-core",

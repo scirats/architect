@@ -10,7 +10,7 @@ path = "src/main.rs"
 [dependencies]
 architect-core = { path = "../core" }
 architect-discovery = { path = "../discovery" }
-architect-bootstrap = { path = "../bootstrap" }
+architect-bootstrap = { path = "../bootstrap", default-features = false }
 architect-scheduler = { path = "../scheduler" }
 tokio.workspace = true
 serde.workspace = true
@@ -34,3 +34,6 @@ tracing-appender.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 http-body-util.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+architect-bootstrap = { path = "../bootstrap", features = ["ssh"] }
