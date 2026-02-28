@@ -1,0 +1,18 @@
+[package]
+name = "architect-ml"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["inference"]
+inference = []
+training = []
+
+[dependencies]
+architect-core = { path = "../core" }
+architect-compute = { path = "../compute" }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+safetensors = { workspace = true }

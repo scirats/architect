@@ -1,0 +1,196 @@
+syntax = "proto3";
+
+package architect;
+
+// Bidirectional streaming service: agents connect to the coordinator
+service AgentService {
+    rpc Session(stream AgentMsg) returns (stream CoordinatorMsg);
+}
+
+// --- Messages from Agent to Coordinator ---
+
+message AgentMsg {
+    oneof payload {
+        NodeInfoProto identity = 1;
+        NodeMetricsProto heartbeat = 2;
+        NodeCapabilitiesProto capabilities = 3;
+        TaskResultProto task_result = 6;
+        TaskProgressProto task_progress = 7;
+        PongProto pong = 8;
+        ErrorProto error = 9;
+        BufferedResultsProto buffered_results = 10;
+        CheckpointProto checkpoint = 11;
+        GradientShardProto gradient_shard = 12;
+        StateSyncResponseProto state_sync_response = 13;
+        CacheReportProto cache_report = 14;
+    }
+}
+
+// --- Messages from Coordinator to Agent ---
+
+message CoordinatorMsg {
+    oneof payload {
+        Empty identify = 1;
+        Empty request_metrics = 2;
+        Empty request_capabilities = 3;
+        AITaskProto submit_task = 8;
+        CancelTaskProto cancel_task = 9;
+        Empty shutdown = 10;
+        Empty purge = 16;
+        PingProto ping = 11;
+        UpdateTokenProto update_token = 12;
+        UpdateAvailableProto update_available = 13;
+        ApplyGradientsProto apply_gradients = 14;
+        StateSyncProto state_sync = 15;
+    }
+}
+
+message UpdateTokenProto {
+    string new_token = 1;
+}
+
+message UpdateAvailableProto {
+    string version = 1;
+    string download_url = 2;
+}
+
+// --- Shared types ---
+
+message Empty {}
+
+message NodeInfoProto {
+    string id = 1;
+    string role = 2;
+    string hostname = 3;
+    string ip = 4;
+    string os = 5;
+    string arch = 6;
+    string device_type = 7;
+    NodeCapabilitiesProto capabilities = 8;
+    string auth_token = 9;
+}
+
+message NodeCapabilitiesProto {
+    uint32 cpu_cores = 1;
+    uint32 cpu_freq_mhz = 2;
+    uint64 ram_total_mb = 3;
+    uint64 ram_available_mb = 4;
+    GpuInfoProto gpu = 5;
+    BatteryInfoProto battery = 6;
+    float compute_score = 7;
+}
+
+message GpuInfoProto {
+    string name = 1;
+    float vram_gb = 2;
+    string compute_capability = 3;
+    bool opencl_available = 4;
+}
+
+message BatteryInfoProto {
+    uint32 level_pct = 1;
+    bool charging = 2;
+}
+
+message NodeMetricsProto {
+    float cpu_usage_pct = 1;
+    float ram_usage_pct = 2;
+    float gpu_usage_pct = 3;
+    bool has_gpu_usage = 4;
+    float network_rx_mbps = 5;
+    float network_tx_mbps = 6;
+    uint64 tasks_completed = 7;
+    uint64 tasks_failed = 8;
+    uint64 uptime_secs = 9;
+}
+
+message TaskResultProto {
+    string task_id = 1;
+    string node_id = 2;
+    bool success = 3;
+    bytes payload = 4;
+    bool has_payload = 5;
+    uint64 duration_ms = 6;
+    string error = 7;
+    bool has_error = 8;
+}
+
+message TaskProgressProto {
+    string task_id = 1;
+    float progress_pct = 2;
+}
+
+message PingProto {
+    uint64 seq = 1;
+}
+
+message PongProto {
+    uint64 seq = 1;
+}
+
+message ErrorProto {
+    string message = 1;
+}
+
+message BufferedResultsProto {
+    repeated TaskResultProto results = 1;
+}
+
+message CancelTaskProto {
+    string task_id = 1;
+}
+
+// --- AI Task ---
+
+message AITaskProto {
+    string task_id = 1;
+    string task_type = 2;
+    bytes payload = 3;
+    uint32 priority = 4;
+    uint64 created_at = 5;
+    uint64 timeout_ms = 6;
+    repeated string depends_on = 7;
+    ResourceQuotaProto quota = 8;
+}
+
+message ResourceQuotaProto {
+    float max_cpu_pct = 1;
+    uint64 max_ram_mb = 2;
+    bool has_cpu = 3;
+    bool has_ram = 4;
+}
+
+message CheckpointProto {
+    string task_id = 1;
+    uint32 epoch = 2;
+    uint64 step = 3;
+    bytes data = 4;
+}
+
+message GradientShardProto {
+    string task_id = 1;
+    uint64 step = 2;
+    uint32 shard_index = 3;
+    repeated float data = 4;
+}
+
+message ApplyGradientsProto {
+    string task_id = 1;
+    uint64 step = 2;
+    repeated float data = 3;
+}
+
+message StateSyncProto {
+    repeated string assigned_tasks = 1;
+}
+
+message StateSyncResponseProto {
+    repeated string running = 1;
+    repeated string completed = 2;
+    repeated string unknown = 3;
+}
+
+message CacheReportProto {
+    repeated string datasets = 1;
+    repeated string models = 2;
+}

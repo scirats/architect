@@ -1,0 +1,28 @@
+[package]
+name = "architect-transport"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+architect-core = { path = "../core" }
+tokio.workspace = true
+serde.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+half.workspace = true
+
+[features]
+default = []
+quic = ["dep:quinn"]
+websocket = ["dep:tokio-tungstenite"]
+
+[dependencies.quinn]
+version = "0.11"
+optional = true
+
+[dependencies.tokio-tungstenite]
+version = "0.24"
+optional = true

@@ -1,0 +1,21 @@
+[package]
+name = "architect-compute"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["cpu"]
+cpu = ["dep:rayon"]
+cuda = []
+opencl = []
+wgpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
+
+[dependencies]
+architect-core = { path = "../core" }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+rayon = { version = "1.10", optional = true }
+wgpu = { version = "24", optional = true }
+bytemuck = { version = "1.14", features = ["derive"], optional = true }
+pollster = { version = "0.4", optional = true }

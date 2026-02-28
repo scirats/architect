@@ -1,0 +1,190 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Linux ──────────────────────────────────────────────
+          - target: x86_64-unknown-linux-gnu
+            label: linux-x86_64
+            os: ubuntu-latest
+            cross: false
+            client: true
+          - target: aarch64-unknown-linux-gnu
+            label: linux-aarch64
+            os: ubuntu-latest
+            cross: true
+            client: true
+          - target: armv7-unknown-linux-gnueabihf
+            label: linux-armv7
+            os: ubuntu-latest
+            cross: true
+            client: true
+
+          # ── macOS ──────────────────────────────────────────────
+          - target: x86_64-apple-darwin
+            label: macos-x86_64
+            os: macos-13
+            cross: false
+            client: true
+          - target: aarch64-apple-darwin
+            label: macos-aarch64
+            os: macos-latest
+            cross: false
+            client: true
+
+          # ── Windows ────────────────────────────────────────────
+          - target: x86_64-pc-windows-gnu
+            label: windows-x86_64
+            os: ubuntu-latest
+            cross: true
+            client: true
+          - target: aarch64-pc-windows-gnullvm
+            label: windows-aarch64
+            os: ubuntu-latest
+            cross: true
+            client: true
+
+          # ── Android (agent only) ───────────────────────────────
+          - target: aarch64-linux-android
+            label: android-aarch64
+            os: ubuntu-latest
+            cross: true
+            client: false
+          - target: armv7-linux-androideabi
+            label: android-armv7
+            os: ubuntu-latest
+            cross: true
+            client: false
+          - target: x86_64-linux-android
+            label: android-x86_64
+            os: ubuntu-latest
+            cross: true
+            client: false
+
+          # ── iOS (agent only) ───────────────────────────────────
+          - target: aarch64-apple-ios
+            label: ios-aarch64
+            os: macos-latest
+            cross: false
+            client: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Install protoc ───────────────────────────────────────
+      - name: Install protoc (Ubuntu)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install protoc (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: brew install protobuf
+
+      # ── Rust toolchain ───────────────────────────────────────
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # ── Install cross ────────────────────────────────────────
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      # ── Build agent ──────────────────────────────────────────
+      - name: Build agent
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} -p architect-agent
+          else
+            cargo build --release --target ${{ matrix.target }} -p architect-agent
+          fi
+
+      # ── Build client (desktop only) ──────────────────────────
+      - name: Build client
+        if: matrix.client
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} -p architect-client
+          else
+            cargo build --release --target ${{ matrix.target }} -p architect-client
+          fi
+
+      # ── Package ──────────────────────────────────────────────
+      - name: Package binaries (Unix)
+        if: "!contains(matrix.target, 'windows')"
+        run: |
+          mkdir -p staging
+          cp target/${{ matrix.target }}/release/architect-agent staging/
+          if [ "${{ matrix.client }}" = "true" ]; then
+            cp target/${{ matrix.target }}/release/architect staging/
+          fi
+          tar czf architect-${{ matrix.label }}.tar.gz -C staging .
+
+      - name: Package binaries (Windows)
+        if: contains(matrix.target, 'windows')
+        run: |
+          mkdir -p staging
+          cp target/${{ matrix.target }}/release/architect-agent.exe staging/
+          if [ "${{ matrix.client }}" = "true" ]; then
+            cp target/${{ matrix.target }}/release/architect.exe staging/
+          fi
+          cd staging && zip -r ../architect-${{ matrix.label }}.zip .
+
+      # ── Raw agent binary (for :update-agents) ────────────────
+      - name: Copy raw agent binary
+        run: |
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp target/${{ matrix.target }}/release/architect-agent.exe \
+               architect-agent-${{ matrix.label }}.exe
+          else
+            cp target/${{ matrix.target }}/release/architect-agent \
+               architect-agent-${{ matrix.label }}
+          fi
+
+      # ── Upload ───────────────────────────────────────────────
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: architect-${{ matrix.label }}
+          path: |
+            architect-${{ matrix.label }}.*
+            architect-agent-${{ matrix.label }}*
+          retention-days: 3
+
+  # ── Release ────────────────────────────────────────────────────
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

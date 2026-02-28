@@ -1,0 +1,26 @@
+[package]
+name = "architect-agent"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "architect-agent"
+path = "src/main.rs"
+
+[dependencies]
+architect-core = { path = "../core" }
+architect-discovery = { path = "../discovery" }
+tokio.workspace = true
+serde.workspace = true
+uuid.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+futures.workspace = true
+tonic.workspace = true
+prost.workspace = true
+tokio-stream.workspace = true
+sysinfo = "0.33"
+tracing-appender.workspace = true
+bincode.workspace = true
