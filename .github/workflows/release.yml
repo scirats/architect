@@ -27,11 +27,6 @@ jobs:
             client: true
 
           # ── macOS ──────────────────────────────────────────────
-          - target: x86_64-apple-darwin
-            label: macos-x86_64
-            os: macos-13
-            cross: false
-            client: true
           - target: aarch64-apple-darwin
             label: macos-aarch64
             os: macos-latest
